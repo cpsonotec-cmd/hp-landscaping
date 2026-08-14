@@ -306,15 +306,19 @@ const CLOUD={
     else if(s)s.textContent='☁ Synced '+new Date().toLocaleTimeString();},
   queuePush(){clearTimeout(this._pt);const s=document.getElementById('syncStatus');if(s)s.textContent='Saving…';
     this._pt=setTimeout(()=>this.push(),1200);},
-  subscribe(){if(!this.sb)return;
-    this.sb.channel('ws').on('postgres_changes',{event:'*',schema:'public',table:'workspace'},payload=>{
-      const nd=payload.new&&payload.new.data;if(!nd||!nd.meta)return;
-      if(JSON.stringify(nd)===JSON.stringify(DB))return; // ignore our own echo
-      if(document.getElementById('modalBg').classList.contains('show'))return; // don't disrupt active editing
-      DB=nd;localStorage.setItem(DB_KEY,JSON.stringify(DB));
-      const s=document.getElementById('syncStatus');if(s)s.textContent='↻ Updated by teammate';
-      go(route);
-    }).subscribe();
+  subscribe(){if(!this.sb||this._subscribed)return;
+    try{
+      const ch=this.sb.channel('ws-'+Math.random().toString(36).slice(2));
+      ch.on('postgres_changes',{event:'*',schema:'public',table:'workspace'},payload=>{
+        const nd=payload.new&&payload.new.data;if(!nd||!nd.meta)return;
+        if(JSON.stringify(nd)===JSON.stringify(DB))return; // ignore our own echo
+        if(document.getElementById('modalBg').classList.contains('show'))return; // don't disrupt active editing
+        DB=nd;localStorage.setItem(DB_KEY,JSON.stringify(DB));
+        const s=document.getElementById('syncStatus');if(s)s.textContent='↻ Updated by teammate';
+        go(route);
+      }).subscribe();
+      this._ch=ch;this._subscribed=true;
+    }catch(e){console.warn('realtime subscribe skipped:',e&&e.message);}
   }
 };
 
@@ -347,7 +351,7 @@ function authErr(msg){const e=document.getElementById('authErr');if(e){e.textCon
 function saveCloudCfg(){const url=document.getElementById('cf_url').value,key=document.getElementById('cf_key').value;
   if(!url||!key){authErr('Enter both the URL and the anon key.');return;}
   CLOUD.setCfg(url,key);if(!CLOUD.initClient()){authErr('Could not start the cloud client. Check the URL.');return;}
-  CLOUD.subscribe();renderAuth('login');}
+  renderAuth('login');}
 async function doLogin(){const email=document.getElementById('au_email').value,pw=document.getElementById('au_pw').value;
   const btn=document.getElementById('auBtn');if(!email||!pw){authErr('Enter your email and password.');return;}
   btn.textContent='Signing in…';btn.disabled=true;
@@ -365,7 +369,8 @@ async function afterLogin(){
   try{await CLOUD.load();}catch(e){authErr('Signed in, but loading data failed: '+(e.message||e)+'. Did you run the setup SQL?');
     const btn=document.getElementById('auBtn');if(btn){btn.textContent='Sign in';btn.disabled=false;}return;}
   ensureRole(CLOUD.session.user.email);
-  CLOUD.subscribe();hideAuthGate();showAccount();bootApp();
+  try{CLOUD.subscribe();}catch(e){}
+  hideAuthGate();showAccount();bootApp();
 }
 async function cloudSignOut(){await CLOUD.signOut();location.reload();}
 function showAccount(){const box=document.getElementById('acctBox');if(CLOUD.ready()&&CLOUD.session){
@@ -2038,7 +2043,7 @@ async function initApp(){
     CLOUD.initClient();
     let sess=null;try{sess=await CLOUD.getSession();}catch(e){}
     if(sess){
-      try{await CLOUD.load();ensureRole(sess.user.email);CLOUD.subscribe();showAccount();bootApp();return;}
+      try{await CLOUD.load();ensureRole(sess.user.email);try{CLOUD.subscribe();}catch(e){}showAccount();bootApp();return;}
       catch(e){/* fall through to gate with error */}
     }
     // configured but not signed in (or load failed)
